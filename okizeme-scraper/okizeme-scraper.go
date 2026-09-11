@@ -32,7 +32,7 @@ func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (in
 	return totalMoves, nil
 }
 
-func GetAllMoveDataCardsFromPage(page *rod.Page, tekkenCharacterName string) (rod.Elements, error) {
+func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName string) (rod.Elements, error) {
 	dataCards := page.MustWaitStable().MustElements("[data-move-command]")
 
 	fmt.Printf("Total Moves Found: %d\n\n", len(dataCards))

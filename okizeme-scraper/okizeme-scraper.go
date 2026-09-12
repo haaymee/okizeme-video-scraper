@@ -260,6 +260,7 @@ func ScrapeOkizemeForFrameData(
 			return err
 		}
 
+		frameData.MoveName = *moveName
 		allFrameData = append(allFrameData, *frameData)
 	}
 

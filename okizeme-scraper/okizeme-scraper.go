@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 type DownloadJob struct {
@@ -38,7 +40,7 @@ func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName stri
 	fmt.Printf("Total Moves Found: %d\n\n", len(dataCards))
 
 	if dataCards.Empty() {
-		panic(fmt.Errorf("%s character does not exist\n", tekkenCharacterName))
+		return nil, fmt.Errorf("%s character does not exist\n", tekkenCharacterName)
 	}
 
 	return dataCards, nil
@@ -56,14 +58,14 @@ func HoverOverDataCard(dataCard *rod.Element, page *rod.Page) {
 
 }
 
-func DownloadWorker(id int, jobs <-chan DownloadJob, wg *sync.WaitGroup) {
+func DownloadWorker(id int, jobs <-chan DownloadJob, wg *sync.WaitGroup, client *http.Client) {
 	defer wg.Done()
 
 	for job := range jobs {
 		start := time.Now()
 		fmt.Printf("Downloading [%s]: %s\n", job.Move, job.VideoDownloadUrl)
 
-		if err := downloadVideo(job.VideoDownloadUrl, job.Move, job.Character, job.OutputDir); err != nil {
+		if err := downloadVideo(client, job.VideoDownloadUrl, job.Move, job.Character, job.OutputDir); err != nil {
 			fmt.Printf(
 				"Worker %d failed: %v\n",
 				id,
@@ -81,11 +83,7 @@ func DownloadWorker(id int, jobs <-chan DownloadJob, wg *sync.WaitGroup) {
 	}
 }
 
-func downloadVideo(url string, move string, characterName string, outputDir string) error {
-	client := &http.Client{
-		Timeout: time.Second * 15,
-	}
-
+func downloadVideo(client *http.Client, url string, move string, characterName string, outputDir string) error {
 	response, err := client.Get(url)
 	if err != nil {
 		return err
@@ -107,4 +105,54 @@ func downloadVideo(url string, move string, characterName string, outputDir stri
 	_, err = io.Copy(file, response.Body)
 
 	return err
+}
+
+func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterName string, scraperOutputDirName string) (
+	*rod.HijackRouter,
+	chan DownloadJob,
+	*sync.WaitGroup,
+) {
+	router := browser.HijackRequests()
+	client := http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	downloadJobs := make(chan DownloadJob, 24)
+
+	var wg sync.WaitGroup
+
+	for i := 1; i <= 4; i++ {
+		wg.Add(1)
+		go DownloadWorker(i, downloadJobs, &wg, &client)
+	}
+
+	cachedVideos := make(map[string]bool)
+	router.Add("*", proto.NetworkResourceTypeMedia, func(ctx *rod.Hijack) {
+		urlString := ctx.Request.URL().String()
+
+		ctx.ContinueRequest(&proto.FetchContinueRequest{})
+
+		if strings.Contains(urlString, ".mp4") {
+
+			if _, keyExists := cachedVideos[urlString]; !keyExists {
+				cachedVideos[urlString] = true
+
+				moveName := strings.SplitAfter(urlString, fmt.Sprintf("%s/", selectedCharacterName))[1]
+				moveName = strings.Split(moveName, "_")[0]
+				moveName, err := url.QueryUnescape(moveName)
+				if err != nil {
+					panic(err)
+				}
+
+				downloadJobs <- DownloadJob{
+					VideoDownloadUrl: urlString,
+					Move:             moveName,
+					Character:        selectedCharacterName,
+					OutputDir:        scraperOutputDirName,
+				}
+			}
+		}
+
+	})
+	return router, downloadJobs, &wg
 }

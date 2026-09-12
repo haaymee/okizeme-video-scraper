@@ -2,12 +2,16 @@ package main
 
 import (
 	"fmt"
+	ankiintegration "okiscraper/anki-integration"
 	okizemescraper "okiscraper/okizeme-scraper"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/huh"
 	"github.com/go-rod/rod"
@@ -60,6 +64,89 @@ func main() {
 		}
 	}
 
+	shouldCreateAnkiDeck := slices.Contains(selectedAppActions, CreateAnkiDeck)
+	if shouldCreateAnkiDeck {
+
+		_, err := ankiintegration.CreateDeck(fmt.Sprintf("Tekken 8::%s Moves", capitalizeFirst(selectedCharacterName)))
+		if err != nil {
+			panic(err)
+		}
+
+		response, err := ankiintegration.GetNoteTypes()
+		if err != nil {
+			panic(err)
+		}
+
+		okiscraperNoteTypeExists := false
+		for _, note := range response {
+			if note == ankiintegration.OKI_SCRAPER_NOTE_TYPE_NAME {
+				okiscraperNoteTypeExists = true
+				break
+			}
+		}
+
+		if !okiscraperNoteTypeExists {
+			fmt.Printf("Okiscraper Note Type does not exist. Creating note type...\n\n")
+			err = ankiintegration.CreateNoteType(ankiintegration.OKI_SCRAPER_NOTE_TYPE_NAME)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			fmt.Printf("Okiscraper Note Type already exists\n\n")
+		}
+
+		webmOutputDir := filepath.Join(scraperOutputDirName, selectedCharacterName, "webm")
+		os.Remove(webmOutputDir)
+		os.MkdirAll(webmOutputDir, os.ModePerm)
+
+		files, err := filepath.Glob(filepath.Join(scraperOutputDirName, selectedCharacterName, "*.mp4"))
+		if err != nil {
+			panic(err)
+		}
+
+		conversionJobs := make(chan ankiintegration.MP4ToWebmConversionJob, 10)
+		var wg sync.WaitGroup
+
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+
+			go func(workerID int) {
+				defer wg.Done()
+
+				for job := range conversionJobs {
+					fmt.Printf("Worker %d converting %s\n", workerID, filepath.Base(job.InputPath))
+
+					conversionErr := ankiintegration.ConvertMp4ToWebm(job.InputPath, job.OutputPath)
+					if conversionErr != nil {
+						fmt.Printf("Conversion failed: %v\n", conversionErr)
+						continue
+					}
+
+					fmt.Printf("Converted %s\n",
+						filepath.Base(job.OutputPath),
+					)
+				}
+			}(i)
+		}
+
+		for _, file := range files {
+
+			fmt.Printf("Processing %s\n", file)
+
+			outputFileName := selectedCharacterName + "_" + strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)) + ".webm"
+			outputFilePath := filepath.Join(webmOutputDir, outputFileName)
+
+			conversionJobs <- ankiintegration.MP4ToWebmConversionJob{
+				InputPath:  file,
+				OutputPath: outputFilePath,
+			}
+		}
+
+		close(conversionJobs)
+		wg.Wait()
+
+	}
+
 	fmt.Printf("Total Time: %s", time.Since(startTime).String())
 }
 
@@ -104,12 +191,12 @@ func ScrapeOkizeme(selectedCharacterName string, scraperOutputDirName string, se
 }
 
 func InitializeOutputDirectory(scraperOutputDirName string, selectedCharacterName string) error {
-	err := os.RemoveAll(filepath.Join(scraperOutputDirName, selectedCharacterName))
-	if err != nil {
-		return err
-	}
+	// err := os.RemoveAll(filepath.Join(scraperOutputDirName, selectedCharacterName))
+	// if err != nil {
+	// 	return err
+	// }
 
-	err = os.MkdirAll(filepath.Join(scraperOutputDirName, selectedCharacterName), os.ModePerm)
+	err := os.MkdirAll(filepath.Join(scraperOutputDirName, selectedCharacterName), os.ModePerm)
 	if err != nil {
 		return err
 	}
@@ -145,13 +232,24 @@ func ConfigureApp() (string, []AppOptions, error) {
 		return "", nil, err
 	}
 
-	if slices.Contains(selectedOptions, CreateAnkiDeck) {
-		if !slices.Contains(selectedOptions, DownloadVideos) || !slices.Contains(selectedOptions, GetMoveFrameData) {
-			selectedOptions = slices.DeleteFunc(selectedOptions, func(o AppOptions) bool {
-				return o == CreateAnkiDeck
-			})
-		}
-	}
+	// if slices.Contains(selectedOptions, CreateAnkiDeck) {
+	// 	if !slices.Contains(selectedOptions, DownloadVideos) || !slices.Contains(selectedOptions, GetMoveFrameData) {
+	// 		selectedOptions = slices.DeleteFunc(selectedOptions, func(o AppOptions) bool {
+	// 			return o == CreateAnkiDeck
+	// 		})
+	// 	}
+	// }
 
 	return tekkenCharacterName, selectedOptions, nil
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Decode the first rune (character) and get its byte size
+	r, size := utf8.DecodeRuneInString(s)
+
+	// Convert the single rune to uppercase and append the rest of the string
+	return string(unicode.ToUpper(r)) + s[size:]
 }

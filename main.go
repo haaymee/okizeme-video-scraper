@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -78,64 +77,27 @@ func ScrapeOkizeme(selectedCharacterName string, scraperOutputDirName string, se
 		return err
 	}
 
-	var router *rod.HijackRouter
-	var downloadJobs chan okizemescraper.DownloadJob
-	var wg *sync.WaitGroup
 	shouldDownloadVideos := slices.Contains(selectedAppActions, DownloadVideos)
+	shouldGetFrameData := slices.Contains(selectedAppActions, GetMoveFrameData)
 
-	if shouldDownloadVideos {
-		router, downloadJobs, wg = okizemescraper.InitNetworkMediaDownloadCallback(browser, selectedCharacterName, scraperOutputDirName)
-		go router.Run()
-	}
-
+	page.MustNavigate(fmt.Sprintf("https://okizeme.gg/database/%s", selectedCharacterName)).MustWaitStable()
 	totalMoves, err := okizemescraper.ParseTotalMoveCountFromPage(page, selectedCharacterName)
 	if err != nil {
 		return err
 	}
 
-	page.MustNavigate(
-		fmt.Sprintf("https://okizeme.gg/database/%s?movesPerPage=%d", selectedCharacterName, totalMoves),
-	).MustWaitStable()
-
-	dataCards, err := okizemescraper.GetAllMoveDataCardsFromCurrentPage(page, selectedCharacterName)
-	if err != nil {
-		return err
-	}
-
-	shouldGetFrameData := slices.Contains(selectedAppActions, GetMoveFrameData)
-	allFrameData := make([]okizemescraper.MoveFrameData, 0, totalMoves)
-	for i, dataCard := range dataCards {
-		moveName := okizemescraper.GetMoveNameFromDataCard(dataCard)
-
-		fmt.Printf("Processing card %d/%d [%s]\n", i+1, len(dataCards), *moveName)
-		okizemescraper.HoverOverDataCard(dataCard, page)
-
-		if shouldGetFrameData {
-			frameData, err := okizemescraper.GetFrameDataFromDataCard(dataCard)
-			if err != nil {
-				return err
-			}
-
-			allFrameData = append(allFrameData, *frameData)
-
-			fmt.Printf("Detected frame data for %s\n\n", *moveName)
+	if shouldDownloadVideos {
+		err = okizemescraper.ScrapeOkizemeForVideos(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
+		if err != nil {
+			return err
 		}
 	}
 
-	if shouldGetFrameData && len(allFrameData) > 0 {
-
-		fmt.Printf("Encoding %s's frame data in JSON...\n\n", selectedCharacterName)
-
-		okizemescraper.SaveMoveFrameDataToJson(
-			allFrameData,
-			"frame_data.json", filepath.Join(scraperOutputDirName, selectedCharacterName),
-		)
-	}
-
-	if shouldDownloadVideos {
-		router.Stop()
-		close(downloadJobs)
-		wg.Wait()
+	if shouldGetFrameData {
+		err = okizemescraper.ScrapeOkizemeForFrameData(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

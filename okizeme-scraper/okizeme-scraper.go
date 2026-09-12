@@ -29,10 +29,10 @@ type MoveFrameData struct {
 	HitLevel      string `json:"hit_level"`
 	FramesOnBlock string `json:"frames_on_block"`
 	FramesOnHit   string `json:"frames_on_hit"`
+	Notes         string `json:"notes"`
 }
 
 func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (int, error) {
-	page.MustNavigate(fmt.Sprintf("https://okizeme.gg/database/%s", tekkenCharacterName)).MustWaitStable()
 	spanPageOf := page.MustElement(".moves_container + div > .text-unselected-grey > span")
 	totalMoves, err := strconv.Atoi(strings.Split(spanPageOf.MustText(), "of ")[1])
 	if err != nil {
@@ -164,18 +164,29 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 	return router, downloadJobs, &wg
 }
 
-func GetFrameDataFromDataCard(dataCard *rod.Element) (*MoveFrameData, error) {
-	footerElement := dataCard.MustElement(":scope > :nth-child(3)")
+func GetFrameDataFromDataCardInCompactView(dataCard *rod.Element) (*MoveFrameData, error) {
+	mainContainer := dataCard.MustElement(":scope > :nth-child(1)")
 
-	startUpAndHitLevelDiv := footerElement.MustElement(":scope > :nth-child(1)")
-	frameDataDiv := footerElement.MustElement(":scope > :nth-child(2)")
+	startUp := mainContainer.MustElement(":scope > :nth-child(2)").MustText()
+	if strings.Contains(startUp, ",") {
+		startUp = strings.Split(startUp, ",")[0]
+	}
+
+	hitLevel := mainContainer.MustElement(":scope > :nth-child(3)").MustText()
+	framesOnBlock := mainContainer.MustElement(":scope > :nth-child(4) span").MustText()
+	framesOnHit := mainContainer.MustElement(":scope > :nth-child(5) span").MustText()
+	notes, _ := mainContainer.MustElement(":scope > :nth-child(8)").Text()
 
 	moveData := MoveFrameData{}
 
-	moveData.Startup = startUpAndHitLevelDiv.MustElement(":scope > :nth-child(1) span").MustText()
-	moveData.HitLevel = startUpAndHitLevelDiv.MustElement(":scope > :nth-child(2) span").MustText()
-	moveData.FramesOnBlock = frameDataDiv.MustElement(":scope > :nth-child(1) span").MustText()
-	moveData.FramesOnHit = frameDataDiv.MustElement(":scope > :nth-child(2) span").MustText()
+	moveData.Startup = startUp
+	moveData.HitLevel = hitLevel
+	moveData.FramesOnBlock = framesOnBlock
+	moveData.FramesOnHit = framesOnHit
+
+	if notes != "" {
+		moveData.Notes = notes
+	}
 
 	return &moveData, nil
 }
@@ -195,4 +206,69 @@ func SaveMoveFrameDataToJson(frameData []MoveFrameData, filename string, saveDir
 	encoder.SetIndent("", "    ")
 
 	return encoder.Encode(frameData)
+}
+
+func ScrapeOkizemeForVideos(browser *rod.Browser, page *rod.Page, selectedCharacterName string, scraperOutputDirName string, totalMoveCount int) error {
+	router, downloadJobs, wg := InitNetworkMediaDownloadCallback(browser, selectedCharacterName, scraperOutputDirName)
+	go router.Run()
+
+	page.MustNavigate(
+		fmt.Sprintf("https://okizeme.gg/database/%s?movesPerPage=%d", selectedCharacterName, totalMoveCount),
+	).MustWaitStable()
+
+	dataCards, err := GetAllMoveDataCardsFromCurrentPage(page, selectedCharacterName)
+	if err != nil {
+		return err
+	}
+
+	for i, dataCard := range dataCards {
+		moveName := GetMoveNameFromDataCard(dataCard)
+
+		fmt.Printf("Processing card %d/%d [%s]\n", i+1, len(dataCards), *moveName)
+		HoverOverDataCard(dataCard, page)
+	}
+
+	router.Stop()
+	close(downloadJobs)
+	wg.Wait()
+
+	return nil
+}
+
+func ScrapeOkizemeForFrameData(
+	browser *rod.Browser, page *rod.Page,
+	selectedCharacterName string, scraperOutputDirName string, totalMoveCount int,
+) error {
+
+	page.MustNavigate(
+		fmt.Sprintf("https://okizeme.gg/database/%s?movesPerPage=%d&view=compact", selectedCharacterName, totalMoveCount),
+	).MustWaitStable()
+
+	dataCards, err := GetAllMoveDataCardsFromCurrentPage(page, selectedCharacterName)
+	if err != nil {
+		return err
+	}
+
+	allFrameData := make([]MoveFrameData, 0, totalMoveCount)
+	for i, dataCard := range dataCards {
+		moveName := GetMoveNameFromDataCard(dataCard)
+
+		fmt.Printf("Processing frame data %d/%d [%s]\n", i+1, len(dataCards), *moveName)
+
+		frameData, err := GetFrameDataFromDataCardInCompactView(dataCard)
+		if err != nil {
+			return err
+		}
+
+		allFrameData = append(allFrameData, *frameData)
+	}
+
+	fmt.Printf("Encoding %s's frame data to JSON...\n\n", selectedCharacterName)
+
+	err = SaveMoveFrameDataToJson(allFrameData, "frame_data.json", filepath.Join(scraperOutputDirName, selectedCharacterName))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -20,7 +20,6 @@ type DownloadJob struct {
 	VideoDownloadUrl string
 	Move             string
 	Character        string
-	OutputDir        string
 }
 
 func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (int, error) {
@@ -58,14 +57,14 @@ func HoverOverDataCard(dataCard *rod.Element, page *rod.Page) {
 
 }
 
-func DownloadWorker(id int, jobs <-chan DownloadJob, wg *sync.WaitGroup, client *http.Client) {
+func DownloadWorker(outputDir string, id int, jobs <-chan DownloadJob, wg *sync.WaitGroup, client *http.Client) {
 	defer wg.Done()
 
 	for job := range jobs {
 		start := time.Now()
 		fmt.Printf("Downloading [%s]: %s\n", job.Move, job.VideoDownloadUrl)
 
-		if err := downloadVideo(client, job.VideoDownloadUrl, job.Move, job.Character, job.OutputDir); err != nil {
+		if err := downloadVideo(client, job.VideoDownloadUrl, job.Move, job.Character, outputDir); err != nil {
 			fmt.Printf(
 				"Worker %d failed: %v\n",
 				id,
@@ -123,7 +122,7 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 
 	for i := 1; i <= 4; i++ {
 		wg.Add(1)
-		go DownloadWorker(i, downloadJobs, &wg, &client)
+		go DownloadWorker(scraperOutputDirName, i, downloadJobs, &wg, &client)
 	}
 
 	cachedVideos := make(map[string]bool)
@@ -148,7 +147,6 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 					VideoDownloadUrl: urlString,
 					Move:             moveName,
 					Character:        selectedCharacterName,
-					OutputDir:        scraperOutputDirName,
 				}
 			}
 		}

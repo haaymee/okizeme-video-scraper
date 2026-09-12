@@ -1,6 +1,7 @@
 package okizemescraper
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,14 @@ type DownloadJob struct {
 	Character        string
 }
 
+type MoveFrameData struct {
+	MoveName      string `json:"move_name"`
+	Startup       string `json:"startup"`
+	HitLevel      string `json:"hit_level"`
+	FramesOnBlock string `json:"frames_on_block"`
+	FramesOnHit   string `json:"frames_on_hit"`
+}
+
 func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (int, error) {
 	page.MustNavigate(fmt.Sprintf("https://okizeme.gg/database/%s", tekkenCharacterName)).MustWaitStable()
 	spanPageOf := page.MustElement(".moves_container + div > .text-unselected-grey > span")
@@ -36,7 +45,7 @@ func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (in
 func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName string) (rod.Elements, error) {
 	dataCards := page.MustWaitStable().MustElements("[data-move-command]")
 
-	fmt.Printf("Total Moves Found: %d\n\n", len(dataCards))
+	fmt.Printf("Total %s Moves Found: %d\n\n", tekkenCharacterName, len(dataCards))
 
 	if dataCards.Empty() {
 		return nil, fmt.Errorf("%s character does not exist\n", tekkenCharacterName)
@@ -153,4 +162,37 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 
 	})
 	return router, downloadJobs, &wg
+}
+
+func GetFrameDataFromDataCard(dataCard *rod.Element) (*MoveFrameData, error) {
+	footerElement := dataCard.MustElement(":scope > :nth-child(3)")
+
+	startUpAndHitLevelDiv := footerElement.MustElement(":scope > :nth-child(1)")
+	frameDataDiv := footerElement.MustElement(":scope > :nth-child(2)")
+
+	moveData := MoveFrameData{}
+
+	moveData.Startup = startUpAndHitLevelDiv.MustElement(":scope > :nth-child(1) span").MustText()
+	moveData.HitLevel = startUpAndHitLevelDiv.MustElement(":scope > :nth-child(2) span").MustText()
+	moveData.FramesOnBlock = frameDataDiv.MustElement(":scope > :nth-child(1) span").MustText()
+	moveData.FramesOnHit = frameDataDiv.MustElement(":scope > :nth-child(2) span").MustText()
+
+	return &moveData, nil
+}
+
+func GetMoveNameFromDataCard(dataCard *rod.Element) *string {
+	return dataCard.MustAttribute("data-move-command")
+}
+
+func SaveMoveFrameDataToJson(frameData []MoveFrameData, filename string, saveDir string) error {
+	file, err := os.Create(filepath.Join(saveDir, filename))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "    ")
+
+	return encoder.Encode(frameData)
 }

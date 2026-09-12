@@ -55,7 +55,7 @@ func main() {
 	startTime := time.Now()
 
 	if shouldScrapeOkizeme {
-		err := ScrapeOkizemeSetup(selectedCharacterName, scraperOutputDirName, selectedAppActions)
+		err := ScrapeOkizeme(selectedCharacterName, scraperOutputDirName, selectedAppActions)
 		if err != nil {
 			panic(err)
 		}
@@ -64,7 +64,7 @@ func main() {
 	fmt.Printf("Total Time: %s", time.Since(startTime).String())
 }
 
-func ScrapeOkizemeSetup(selectedCharacterName string, scraperOutputDirName string, selectedAppActions []AppOptions) error {
+func ScrapeOkizeme(selectedCharacterName string, scraperOutputDirName string, selectedAppActions []AppOptions) error {
 
 	fmt.Printf("\nScraping okizeme.gg...\n\n")
 
@@ -82,6 +82,7 @@ func ScrapeOkizemeSetup(selectedCharacterName string, scraperOutputDirName strin
 	var downloadJobs chan okizemescraper.DownloadJob
 	var wg *sync.WaitGroup
 	shouldDownloadVideos := slices.Contains(selectedAppActions, DownloadVideos)
+
 	if shouldDownloadVideos {
 		router, downloadJobs, wg = okizemescraper.InitNetworkMediaDownloadCallback(browser, selectedCharacterName, scraperOutputDirName)
 		go router.Run()
@@ -101,9 +102,34 @@ func ScrapeOkizemeSetup(selectedCharacterName string, scraperOutputDirName strin
 		return err
 	}
 
+	shouldGetFrameData := slices.Contains(selectedAppActions, GetMoveFrameData)
+	allFrameData := make([]okizemescraper.MoveFrameData, 0, totalMoves)
 	for i, dataCard := range dataCards {
-		fmt.Printf("Processing card %d/%d\n", i+1, len(dataCards))
+		moveName := okizemescraper.GetMoveNameFromDataCard(dataCard)
+
+		fmt.Printf("Processing card %d/%d [%s]\n", i+1, len(dataCards), *moveName)
 		okizemescraper.HoverOverDataCard(dataCard, page)
+
+		if shouldGetFrameData {
+			frameData, err := okizemescraper.GetFrameDataFromDataCard(dataCard)
+			if err != nil {
+				return err
+			}
+
+			allFrameData = append(allFrameData, *frameData)
+
+			fmt.Printf("Detected frame data for %s\n\n", *moveName)
+		}
+	}
+
+	if shouldGetFrameData && len(allFrameData) > 0 {
+
+		fmt.Printf("Encoding %s's frame data in JSON...\n\n", selectedCharacterName)
+
+		okizemescraper.SaveMoveFrameDataToJson(
+			allFrameData,
+			"frame_data.json", filepath.Join(scraperOutputDirName, selectedCharacterName),
+		)
 	}
 
 	if shouldDownloadVideos {

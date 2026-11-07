@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"path/filepath"
+
+	"okiscraper/internal/models"
 )
 
 const (
@@ -64,32 +65,7 @@ type AnkiResponse[T any] struct {
 	Error  string `json:"error"`
 }
 
-type MP4ToWebmConversionJob struct {
-	InputPath  string
-	OutputPath string
-}
-
-type MoveDataCard struct {
-	CharacterName string
-	CommandName   string
-	VideoPath     string
-	FramesOnBlock string
-	FramesOnHit   string
-	HitLevel      string
-	Notes         string
-}
-
-func ConvertMp4ToWebm(inputPath string, outputPath string) error {
-	cmd := exec.Command(
-		"ffmpeg",
-		"-i", inputPath,
-		outputPath,
-	)
-
-	return cmd.Run()
-}
-
-func CreateCard(deckName string, data *MoveDataCard) error {
+func CreateCard(deckName string, characterName string, mv models.Move, videoPath string) error {
 	request := AnkiPayload{
 		Action:  "addNote",
 		Version: 6,
@@ -99,17 +75,17 @@ func CreateCard(deckName string, data *MoveDataCard) error {
 				"modelName": OKI_SCRAPER_NOTE_TYPE_NAME,
 
 				"fields": map[string]string{
-					"Move Command":    data.CommandName,
-					"Frames On Block": data.FramesOnBlock,
-					"Frames On Hit":   data.FramesOnHit,
-					"Hit Level":       data.HitLevel,
-					"Notes":           data.Notes,
+					"Move Command":    mv.Command,
+					"Frames On Block": mv.FramesOnBlock,
+					"Frames On Hit":   mv.FramesOnHit,
+					"Hit Level":       mv.HitLevel,
+					"Notes":           mv.Notes,
 				},
 
 				"video": []map[string]any{
 					{
-						"filename": filepath.Base(data.VideoPath),
-						"path":     data.VideoPath,
+						"filename": filepath.Base(videoPath),
+						"path":     videoPath,
 						"fields": []string{
 							"Video",
 						},
@@ -118,7 +94,7 @@ func CreateCard(deckName string, data *MoveDataCard) error {
 
 				"tags": []string{
 					"tekken8",
-					data.CharacterName,
+					characterName,
 					"okiscraper",
 				},
 			},

@@ -15,6 +15,9 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/go-rod/stealth"
+
+	"okiscraper/internal/models"
 )
 
 type DownloadJob struct {
@@ -23,18 +26,23 @@ type DownloadJob struct {
 	Character        string
 }
 
-type MoveFrameData struct {
-	MoveName      string `json:"move_name"`
-	Startup       string `json:"startup"`
-	HitLevel      string `json:"hit_level"`
-	FramesOnBlock string `json:"frames_on_block"`
-	FramesOnHit   string `json:"frames_on_hit"`
-	Notes         string `json:"notes"`
-}
-
 func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (int, error) {
-	spanPageOf := page.MustElement(".moves_container + div > .text-unselected-grey > span")
-	totalMoves, err := strconv.Atoi(strings.Split(spanPageOf.MustText(), "of ")[1])
+	spanPageOf, err := page.Element(".moves_container + div > .text-unselected-grey > span")
+	if err != nil {
+		return -1, err
+	}
+
+	spanPageOfText, err := spanPageOf.Text()
+	if err != nil {
+		return -1, err
+	}
+
+	parts := strings.Split(spanPageOfText, "of ")
+	if len(parts) < 2 {
+		return -1, fmt.Errorf("could not parse move count from %q", spanPageOfText)
+	}
+
+	totalMoves, err := strconv.Atoi(strings.TrimSpace(parts[1]))
 	if err != nil {
 		return -1, err
 	}
@@ -43,7 +51,14 @@ func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (in
 }
 
 func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName string) (rod.Elements, error) {
-	dataCards := page.MustWaitStable().MustElements("[data-move-command]")
+	if err := page.WaitStable(time.Second * 3.0); err != nil {
+		return nil, err
+	}
+
+	dataCards, err := page.Elements("[data-move-command]")
+	if err != nil {
+		return nil, err
+	}
 
 	fmt.Printf("Total %s Moves Found: %d\n\n", tekkenCharacterName, len(dataCards))
 
@@ -54,16 +69,23 @@ func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName stri
 	return dataCards, nil
 }
 
-func HoverOverDataCard(dataCard *rod.Element, page *rod.Page) {
-	dataCard.MustEval(`() => this.scrollIntoView({
+func HoverOverDataCard(dataCard *rod.Element, page *rod.Page) error {
+	if _, err := dataCard.Eval(`() => this.scrollIntoView({
 		block: "center",
 		inline: "center",
 		behavior: "auto"
-	})`)
+	})`); err != nil {
+		return err
+	}
 
-	dataCard.MustHover()
-	page.MustWaitStable()
+	if err := dataCard.Hover(); err != nil {
+		return err
+	}
+	if err := page.WaitStable(time.Second * 3.0); err != nil {
+		return err
+	}
 
+	return nil
 }
 
 func DownloadWorker(outputDir string, id int, jobs <-chan DownloadJob, wg *sync.WaitGroup, client *http.Client) {
@@ -145,11 +167,14 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 			if _, keyExists := cachedVideos[urlString]; !keyExists {
 				cachedVideos[urlString] = true
 
-				moveName := strings.SplitAfter(urlString, fmt.Sprintf("%s/", selectedCharacterName))[1]
-				moveName = strings.Split(moveName, "_")[0]
-				moveName, err := url.QueryUnescape(moveName)
+				parts := strings.SplitAfter(urlString, fmt.Sprintf("%s/", selectedCharacterName))
+				if len(parts) < 2 {
+					return
+				}
+				moveName, err := url.QueryUnescape(strings.Split(parts[1], "_")[0])
 				if err != nil {
-					panic(err)
+					fmt.Printf("Skipping media %s: %v\n", urlString, err)
+					return
 				}
 
 				downloadJobs <- DownloadJob{
@@ -164,20 +189,59 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 	return router, downloadJobs, &wg
 }
 
-func GetFrameDataFromDataCardInCompactView(dataCard *rod.Element) (*MoveFrameData, error) {
-	mainContainer := dataCard.MustElement(":scope > :nth-child(1)")
+func GetFrameDataFromDataCardInCompactView(dataCard *rod.Element) (*models.Move, error) {
+	mainContainer, err := dataCard.Element(":scope > :nth-child(1)")
+	if err != nil {
+		return nil, err
+	}
 
-	startUp := mainContainer.MustElement(":scope > :nth-child(2)").MustText()
+	startUpEl, err := mainContainer.Element(":scope > :nth-child(2)")
+	if err != nil {
+		return nil, err
+	}
+	startUp, err := startUpEl.Text()
+	if err != nil {
+		return nil, err
+	}
 	if strings.Contains(startUp, ",") {
 		startUp = strings.Split(startUp, ",")[0]
 	}
 
-	hitLevel := mainContainer.MustElement(":scope > :nth-child(3)").MustText()
-	framesOnBlock := mainContainer.MustElement(":scope > :nth-child(4) span").MustText()
-	framesOnHit := mainContainer.MustElement(":scope > :nth-child(5) span").MustText()
-	notes, _ := mainContainer.MustElement(":scope > :nth-child(8)").Text()
+	hitLevelEl, err := mainContainer.Element(":scope > :nth-child(3)")
+	if err != nil {
+		return nil, err
+	}
+	hitLevel, err := hitLevelEl.Text()
+	if err != nil {
+		return nil, err
+	}
 
-	moveData := MoveFrameData{}
+	framesOnBlockEl, err := mainContainer.Element(":scope > :nth-child(4) span")
+	if err != nil {
+		return nil, err
+	}
+	framesOnBlock, err := framesOnBlockEl.Text()
+	if err != nil {
+		return nil, err
+	}
+
+	framesOnHitEl, err := mainContainer.Element(":scope > :nth-child(5) span")
+	if err != nil {
+		return nil, err
+	}
+	framesOnHit, err := framesOnHitEl.Text()
+	if err != nil {
+		return nil, err
+	}
+
+	notes := ""
+	if notesEl, err := mainContainer.Element(":scope > :nth-child(8)"); err == nil {
+		if t, err := notesEl.Text(); err == nil {
+			notes = t
+		}
+	}
+
+	moveData := models.Move{}
 
 	moveData.Startup = startUp
 	moveData.HitLevel = hitLevel
@@ -191,11 +255,11 @@ func GetFrameDataFromDataCardInCompactView(dataCard *rod.Element) (*MoveFrameDat
 	return &moveData, nil
 }
 
-func GetMoveNameFromDataCard(dataCard *rod.Element) *string {
-	return dataCard.MustAttribute("data-move-command")
+func GetMoveNameFromDataCard(dataCard *rod.Element) (*string, error) {
+	return dataCard.Attribute("data-move-command")
 }
 
-func SaveMoveFrameDataToJson(frameData []MoveFrameData, filename string, saveDir string) error {
+func SaveMoveFrameDataToJson(frameData []models.Move, filename string, saveDir string) error {
 	file, err := os.Create(filepath.Join(saveDir, filename))
 	if err != nil {
 		return err
@@ -212,9 +276,14 @@ func ScrapeOkizemeForVideos(browser *rod.Browser, page *rod.Page, selectedCharac
 	router, downloadJobs, wg := InitNetworkMediaDownloadCallback(browser, selectedCharacterName, scraperOutputDirName)
 	go router.Run()
 
-	page.MustNavigate(
+	if err := page.Navigate(
 		fmt.Sprintf("https://okizeme.gg/database/%s?movesPerPage=%d", selectedCharacterName, totalMoveCount),
-	).MustWaitStable()
+	); err != nil {
+		return err
+	}
+	if err := page.WaitStable(time.Second * 3.0); err != nil {
+		return err
+	}
 
 	dataCards, err := GetAllMoveDataCardsFromCurrentPage(page, selectedCharacterName)
 	if err != nil {
@@ -222,10 +291,19 @@ func ScrapeOkizemeForVideos(browser *rod.Browser, page *rod.Page, selectedCharac
 	}
 
 	for i, dataCard := range dataCards {
-		moveName := GetMoveNameFromDataCard(dataCard)
+		moveName, err := GetMoveNameFromDataCard(dataCard)
+		if err != nil {
+			return err
+		}
+		if moveName == nil {
+			fmt.Printf("Skipping card %d/%d: no move command attribute\n", i+1, len(dataCards))
+			continue
+		}
 
 		fmt.Printf("Processing card %d/%d [%s]\n", i+1, len(dataCards), *moveName)
-		HoverOverDataCard(dataCard, page)
+		if err := HoverOverDataCard(dataCard, page); err != nil {
+			return err
+		}
 	}
 
 	router.Stop()
@@ -240,18 +318,30 @@ func ScrapeOkizemeForFrameData(
 	selectedCharacterName string, scraperOutputDirName string, totalMoveCount int,
 ) error {
 
-	page.MustNavigate(
+	if err := page.Navigate(
 		fmt.Sprintf("https://okizeme.gg/database/%s?movesPerPage=%d&view=compact", selectedCharacterName, totalMoveCount),
-	).MustWaitStable()
+	); err != nil {
+		return err
+	}
+	if err := page.WaitStable(time.Second * 3.0); err != nil {
+		return err
+	}
 
 	dataCards, err := GetAllMoveDataCardsFromCurrentPage(page, selectedCharacterName)
 	if err != nil {
 		return err
 	}
 
-	allFrameData := make([]MoveFrameData, 0, totalMoveCount)
+	allFrameData := make([]models.Move, 0, totalMoveCount)
 	for i, dataCard := range dataCards {
-		moveName := GetMoveNameFromDataCard(dataCard)
+		moveName, err := GetMoveNameFromDataCard(dataCard)
+		if err != nil {
+			return err
+		}
+		if moveName == nil {
+			fmt.Printf("Skipping card %d/%d: no move command attribute\n", i+1, len(dataCards))
+			continue
+		}
 
 		fmt.Printf("Processing frame data %d/%d [%s]\n", i+1, len(dataCards), *moveName)
 
@@ -260,7 +350,7 @@ func ScrapeOkizemeForFrameData(
 			return err
 		}
 
-		frameData.MoveName = *moveName
+		frameData.Command = *moveName
 		allFrameData = append(allFrameData, *frameData)
 	}
 
@@ -269,6 +359,51 @@ func ScrapeOkizemeForFrameData(
 	err = SaveMoveFrameDataToJson(allFrameData, "frame_data.json", filepath.Join(scraperOutputDirName, selectedCharacterName))
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func Scrape(character, outputDir string, downloadVideos, getFrameData bool) error {
+	fmt.Printf("\nScraping okizeme.gg...\n\n")
+
+	browser := rod.New()
+	if err := browser.Connect(); err != nil {
+		return err
+	}
+	defer browser.Close()
+
+	page, err := stealth.Page(browser)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Join(outputDir, character), os.ModePerm); err != nil {
+		return err
+	}
+
+	if err := page.Navigate(fmt.Sprintf("https://okizeme.gg/database/%s", character)); err != nil {
+		return err
+	}
+	if err := page.WaitStable(time.Second * 3.0); err != nil {
+		return err
+	}
+
+	totalMoves, err := ParseTotalMoveCountFromPage(page, character)
+	if err != nil {
+		return err
+	}
+
+	if downloadVideos {
+		if err := ScrapeOkizemeForVideos(browser, page, character, outputDir, totalMoves); err != nil {
+			return err
+		}
+	}
+
+	if getFrameData {
+		if err := ScrapeOkizemeForFrameData(browser, page, character, outputDir, totalMoves); err != nil {
+			return err
+		}
 	}
 
 	return nil

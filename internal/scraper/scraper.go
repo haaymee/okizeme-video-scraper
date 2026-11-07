@@ -1,4 +1,4 @@
-package okizemescraper
+package scraper
 
 import (
 	"encoding/json"

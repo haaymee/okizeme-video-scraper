@@ -1,4 +1,4 @@
-package ankiintegration
+package anki
 
 import (
 	"bytes"

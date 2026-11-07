@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	ankiintegration "okiscraper/anki-integration"
-	okizemescraper "okiscraper/okizeme-scraper"
+	anki "okiscraper/internal/anki"
+	scraper "okiscraper/internal/scraper"
 	"os"
 	"path/filepath"
 	"slices"
@@ -67,19 +67,19 @@ func main() {
 	shouldCreateAnkiDeck := slices.Contains(selectedAppActions, CreateAnkiDeck)
 	if shouldCreateAnkiDeck {
 
-		_, err := ankiintegration.CreateDeck(fmt.Sprintf("Tekken 8::%s Moves", capitalizeFirst(selectedCharacterName)))
+		_, err := anki.CreateDeck(fmt.Sprintf("Tekken 8::%s Moves", capitalizeFirst(selectedCharacterName)))
 		if err != nil {
 			panic(err)
 		}
 
-		response, err := ankiintegration.GetNoteTypes()
+		response, err := anki.GetNoteTypes()
 		if err != nil {
 			panic(err)
 		}
 
 		okiscraperNoteTypeExists := false
 		for _, note := range response {
-			if note == ankiintegration.OKI_SCRAPER_NOTE_TYPE_NAME {
+			if note == anki.OKI_SCRAPER_NOTE_TYPE_NAME {
 				okiscraperNoteTypeExists = true
 				break
 			}
@@ -87,7 +87,7 @@ func main() {
 
 		if !okiscraperNoteTypeExists {
 			fmt.Printf("Okiscraper Note Type does not exist. Creating note type...\n\n")
-			err = ankiintegration.CreateNoteType(ankiintegration.OKI_SCRAPER_NOTE_TYPE_NAME)
+			err = anki.CreateNoteType(anki.OKI_SCRAPER_NOTE_TYPE_NAME)
 			if err != nil {
 				panic(err)
 			}
@@ -104,7 +104,7 @@ func main() {
 			panic(err)
 		}
 
-		conversionJobs := make(chan ankiintegration.MP4ToWebmConversionJob, 10)
+		conversionJobs := make(chan anki.MP4ToWebmConversionJob, 10)
 		var wg sync.WaitGroup
 
 		for i := 0; i < 4; i++ {
@@ -116,7 +116,7 @@ func main() {
 				for job := range conversionJobs {
 					fmt.Printf("Worker %d converting %s\n", workerID, filepath.Base(job.InputPath))
 
-					conversionErr := ankiintegration.ConvertMp4ToWebm(job.InputPath, job.OutputPath)
+					conversionErr := anki.ConvertMp4ToWebm(job.InputPath, job.OutputPath)
 					if conversionErr != nil {
 						fmt.Printf("Conversion failed: %v\n", conversionErr)
 						continue
@@ -136,7 +136,7 @@ func main() {
 			outputFileName := selectedCharacterName + "_" + strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)) + ".webm"
 			outputFilePath := filepath.Join(webmOutputDir, outputFileName)
 
-			conversionJobs <- ankiintegration.MP4ToWebmConversionJob{
+			conversionJobs <- anki.MP4ToWebmConversionJob{
 				InputPath:  file,
 				OutputPath: outputFilePath,
 			}
@@ -168,20 +168,20 @@ func ScrapeOkizeme(selectedCharacterName string, scraperOutputDirName string, se
 	shouldGetFrameData := slices.Contains(selectedAppActions, GetMoveFrameData)
 
 	page.MustNavigate(fmt.Sprintf("https://okizeme.gg/database/%s", selectedCharacterName)).MustWaitStable()
-	totalMoves, err := okizemescraper.ParseTotalMoveCountFromPage(page, selectedCharacterName)
+	totalMoves, err := scraper.ParseTotalMoveCountFromPage(page, selectedCharacterName)
 	if err != nil {
 		return err
 	}
 
 	if shouldDownloadVideos {
-		err = okizemescraper.ScrapeOkizemeForVideos(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
+		err = scraper.ScrapeOkizemeForVideos(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
 		if err != nil {
 			return err
 		}
 	}
 
 	if shouldGetFrameData {
-		err = okizemescraper.ScrapeOkizemeForFrameData(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
+		err = scraper.ScrapeOkizemeForFrameData(browser, page, selectedCharacterName, scraperOutputDirName, totalMoves)
 		if err != nil {
 			return err
 		}

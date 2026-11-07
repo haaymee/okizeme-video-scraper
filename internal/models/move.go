@@ -1,7 +1,7 @@
 package models
 
 type Move struct {
-	Slug          string `json:"slug"`
+	Key           string `json:"key"`
 	Command       string `json:"move_name"` // keep legacy JSON key
 	Startup       string `json:"startup"`
 	HitLevel      string `json:"hit_level"`

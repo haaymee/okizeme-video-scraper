@@ -39,13 +39,19 @@ scraper_output/<character>/
 ├── <key>.mp4                 # downloaded clips (key = lossless-encoded move command)
 ├── frame_data.json           # [{ key, move_name, startup, hit_level, frames_on_block, frames_on_hit, notes }, ...]
 └── webm/
-    └── <character>_<key>.webm
+    └── <character>_<urlkey>.webm
 ```
 
 `key` is `models.EncodeMoveName(move)` — a **lossless**, filesystem-safe encoding of the
 move command (e.g. `1+2` -> `1%2B2`, which stays distinct from `1,2` -> `1%2C2`). Frame
 data and videos are joined on this key, so `+` (simultaneous) and `,` (sequence) never
 collide, and illegal-in-filename characters are handled safely.
+
+`urlkey` is `key` with every `%` replaced by `!` (e.g. `1%2B2` -> `1!2B2`). This is
+lossless (`EncodeMoveName` percent-encodes a literal `!` as `%21`, so the encoded form
+never contains a raw `!`) and makes the `.webm` filename safe to reference from an
+embedded `<video><source src="...">` — a literal `%` would otherwise be percent-decoded
+by Anki's webview and the video would fail to load.
 
 ## Architecture
 

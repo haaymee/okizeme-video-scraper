@@ -14,20 +14,15 @@ const (
 	OKI_SCRAPER_NOTE_TYPE_NAME = "okiscraper-tekken8"
 	ankiConnectURL             = "http://localhost:8765"
 
-	okiScraperFrontCardTemplate = `
-	<video autoplay loop>
-	<source src="{{Video}}" type="video/webm">
-	</video>
-	<br>
-	{{Move Command}}
-	`
-
-	okiScraperBackCardTemplate = `
+	okiScraperFrontCardTemplate = "{{Video}}"
+	okiScraperBackCardTemplate  = `
 	{{FrontSide}}
 
 	<hr id=answer>
 
 	<div class="answer">
+		<b>{{Move Command}}</b> <br><br>
+		<b>Startup:</b> {{Startup}} <br><br>
 		<b>On Block:</b> {{Frames On Block}} <br><br>
 		<b>On Hit:</b> {{Frames On Hit}} <br><br>
 		<b>Hit Level:</b> {{Hit Level}} <br><br>
@@ -52,6 +47,13 @@ const (
 		color: black;
 		background-color: white;
 	}
+
+	video {
+		max-width: 100%;
+		height: auto;
+		display: block;
+		margin: 0 auto;
+	}
 	`
 )
 
@@ -67,6 +69,21 @@ type AnkiResponse[T any] struct {
 }
 
 func CreateCard(deckName string, characterName string, mv models.Move, videoPath string) error {
+	filename, err := storeMediaFile(filepath.Base(videoPath), videoPath)
+	if err != nil {
+		return err
+	}
+
+	// Embed the video inline in the field so it autoplays/loops directly in the
+	// card (rather than a [sound:...] popup). The <source src="..."> tag is
+	// referenced from the field on purpose: Anki's media checker only scans note
+	// fields for media references, so this keeps the .webm from being reported
+	// as unused and deleted.
+	videoHTML := fmt.Sprintf(
+		`<video autoplay muted loop playsinline><source src="%s" type="video/webm"></video>`,
+		filename,
+	)
+
 	request := AnkiPayload{
 		Action:  "addNote",
 		Version: 6,
@@ -75,22 +92,24 @@ func CreateCard(deckName string, characterName string, mv models.Move, videoPath
 				"deckName":  deckName,
 				"modelName": OKI_SCRAPER_NOTE_TYPE_NAME,
 
+				// Scope duplicate detection to this character's deck. The note
+				// type is shared across all characters and its first field
+				// ("Move Command") is generic notation (e.g. "df+2") that repeats
+				// across characters. Without this, AnkiConnect's default global
+				// check rejects a move if any other character already has the same
+				// notation.
+				"options": map[string]any{
+					"duplicateScope": "deck",
+				},
+
 				"fields": map[string]string{
 					"Move Command":    mv.Command,
+					"Video":           videoHTML,
+					"Startup":         mv.Startup,
 					"Frames On Block": mv.FramesOnBlock,
 					"Frames On Hit":   mv.FramesOnHit,
 					"Hit Level":       mv.HitLevel,
 					"Notes":           mv.Notes,
-				},
-
-				"video": []map[string]any{
-					{
-						"filename": filepath.Base(videoPath),
-						"path":     videoPath,
-						"fields": []string{
-							"Video",
-						},
-					},
 				},
 
 				"tags": []string{
@@ -110,6 +129,28 @@ func CreateCard(deckName string, characterName string, mv models.Move, videoPath
 	fmt.Println("Created note:", response.Result)
 
 	return nil
+}
+
+// storeMediaFile copies a file into Anki's media collection via the AnkiConnect
+// storeMediaFile action and returns the filename as stored (Anki may rename it
+// to avoid collisions). Unlike the `video` field attachment, this does not wrap
+// the value in [sound:...].
+func storeMediaFile(filename, path string) (string, error) {
+	request := AnkiPayload{
+		Action:  "storeMediaFile",
+		Version: 6,
+		Params: map[string]any{
+			"filename": filename,
+			"path":     path,
+		},
+	}
+
+	response, err := executeAnkiRequest[string](request)
+	if err != nil {
+		return "", err
+	}
+
+	return response.Result, nil
 }
 
 func CreateDeck(deckName string) (int, error) {
@@ -155,6 +196,7 @@ func CreateNoteType(noteTypeName string) error {
 			"inOrderFields": []string{
 				"Move Command",
 				"Video",
+				"Startup",
 				"Frames On Block",
 				"Frames On Hit",
 				"Hit Level",
@@ -164,7 +206,7 @@ func CreateNoteType(noteTypeName string) error {
 			"cardTemplates": []map[string]string{
 				{
 					"Name":  "Card 1",
-					"Front": "{{Video}}<br>{{Move Command}}",
+					"Front": okiScraperFrontCardTemplate,
 					"Back":  okiScraperBackCardTemplate,
 				},
 			},

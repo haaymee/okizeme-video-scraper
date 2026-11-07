@@ -125,7 +125,8 @@ func (a *App) convertVideosToWebm() error {
 
 	for _, file := range files {
 		fmt.Printf("Processing %s\n", file)
-		outputFileName := a.Character + "_" + strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)) + ".webm"
+		key := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		outputFileName := a.Character + "_" + webmFileKey(key) + ".webm"
 		jobs <- convertJob{
 			InputPath:  file,
 			OutputPath: filepath.Join(webmOutputDir, outputFileName),
@@ -148,6 +149,11 @@ func (a *App) buildCards(deckName string) error {
 	if err != nil {
 		return err
 	}
+
+	// The scraper can emit the same move twice (e.g. an empty "N/A" stub
+	// alongside the real entry). Collapse those so we don't try to create
+	// duplicate notes for a single character.
+	moves = dedupeMoves(moves)
 
 	webmByKey, err := webmPathsByKey(filepath.Join(baseDir, "webm"), a.Character)
 	if err != nil {
@@ -184,10 +190,37 @@ func readFrameData(path string) ([]models.Move, error) {
 	return moves, nil
 }
 
+// dedupeMoves collapses entries that share a Key (e.g. the scraper emitting an
+// empty "N/A" stub alongside the real move), keeping a single move per key.
+// When duplicates are found, the entry with real frame data is preferred over a
+// stub.
+func dedupeMoves(moves []models.Move) []models.Move {
+	out := make([]models.Move, 0, len(moves))
+	index := make(map[string]int, len(moves))
+	for _, m := range moves {
+		if i, seen := index[m.Key]; seen {
+			if isStubMove(out[i]) && !isStubMove(m) {
+				out[i] = m
+			}
+			continue
+		}
+		index[m.Key] = len(out)
+		out = append(out, m)
+	}
+	return out
+}
+
+// isStubMove reports whether a move carries no real frame data (the scraper's
+// placeholder for a listed-but-empty move).
+func isStubMove(m models.Move) bool {
+	return m.FramesOnBlock == "N/A" && m.FramesOnHit == "N/A"
+}
+
 // webmPathsByKey maps each move Key to its absolute .webm path. Paths are made
 // absolute because AnkiConnect resolves `path` relative to its own working
 // directory (the Anki process), not this program's. Files are named
-// "{character}_{key}.webm" (see convertVideosToWebm).
+// "{character}_{key}.webm" where the key has been made URL-safe with
+// webmFileKey (see convertVideosToWebm).
 func webmPathsByKey(webmDir, character string) (map[string]string, error) {
 	files, err := filepath.Glob(filepath.Join(webmDir, "*.webm"))
 	if err != nil {
@@ -201,9 +234,26 @@ func webmPathsByKey(webmDir, character string) (map[string]string, error) {
 			return nil, err
 		}
 		base := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
-		byKey[strings.TrimPrefix(base, prefix)] = abs
+		key := moveKeyFromWebmFile(strings.TrimPrefix(base, prefix))
+		byKey[key] = abs
 	}
 	return byKey, nil
+}
+
+// webmFileKey converts a lossless-encoded move key (see models.EncodeMoveName)
+// into a filename fragment that is both filesystem- and URL-safe. The only
+// character EncodeMoveName emits that is unsafe to reference inside a
+// <video><source src="..."> is '%' (the webview/HTTP layer percent-decodes it).
+// Every '%' is replaced with '!', which is lossless: EncodeMoveName percent-
+// encodes a literal '!' as "%21", so the encoded form never contains a raw '!'.
+func webmFileKey(encodedKey string) string {
+	return strings.ReplaceAll(encodedKey, "%", "!")
+}
+
+// moveKeyFromWebmFile reverses webmFileKey, recovering the lossless-encoded move
+// key from the URL-safe filename fragment.
+func moveKeyFromWebmFile(fileFragment string) string {
+	return strings.ReplaceAll(fileFragment, "!", "%")
 }
 
 type cardPlan struct {

@@ -14,10 +14,18 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
 
 	"okiscraper/internal/models"
+)
+
+const (
+	downloadWorkerCount = 4
+	downloadJobBuffer   = 24
+	mediaHTTPTimeout    = 15 * time.Second
+	pageStableWait      = 3 * time.Second
 )
 
 type DownloadJob struct {
@@ -51,7 +59,7 @@ func ParseTotalMoveCountFromPage(page *rod.Page, tekkenCharacterName string) (in
 }
 
 func GetAllMoveDataCardsFromCurrentPage(page *rod.Page, tekkenCharacterName string) (rod.Elements, error) {
-	if err := page.WaitStable(time.Second * 3.0); err != nil {
+	if err := page.WaitStable(pageStableWait); err != nil {
 		return nil, err
 	}
 
@@ -81,7 +89,7 @@ func HoverOverDataCard(dataCard *rod.Element, page *rod.Page) error {
 	if err := dataCard.Hover(); err != nil {
 		return err
 	}
-	if err := page.WaitStable(time.Second * 3.0); err != nil {
+	if err := page.WaitStable(pageStableWait); err != nil {
 		return err
 	}
 
@@ -124,7 +132,7 @@ func downloadVideo(client *http.Client, url string, move string, characterName s
 		return fmt.Errorf("Unexpected HTTP Status: %s", response.Status)
 	}
 
-	filename := filepath.Join(outputDir, characterName, fmt.Sprintf("%s.mp4", move))
+	filename := filepath.Join(outputDir, characterName, fmt.Sprintf("%s.mp4", models.EncodeMoveName(move)))
 
 	file, err := os.Create(filename)
 	if err != nil {
@@ -144,14 +152,14 @@ func InitNetworkMediaDownloadCallback(browser *rod.Browser, selectedCharacterNam
 ) {
 	router := browser.HijackRequests()
 	client := http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: mediaHTTPTimeout,
 	}
 
-	downloadJobs := make(chan DownloadJob, 24)
+	downloadJobs := make(chan DownloadJob, downloadJobBuffer)
 
 	var wg sync.WaitGroup
 
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= downloadWorkerCount; i++ {
 		wg.Add(1)
 		go DownloadWorker(scraperOutputDirName, i, downloadJobs, &wg, &client)
 	}
@@ -281,7 +289,7 @@ func ScrapeOkizemeForVideos(browser *rod.Browser, page *rod.Page, selectedCharac
 	); err != nil {
 		return err
 	}
-	if err := page.WaitStable(time.Second * 3.0); err != nil {
+	if err := page.WaitStable(pageStableWait); err != nil {
 		return err
 	}
 
@@ -323,7 +331,7 @@ func ScrapeOkizemeForFrameData(
 	); err != nil {
 		return err
 	}
-	if err := page.WaitStable(time.Second * 3.0); err != nil {
+	if err := page.WaitStable(pageStableWait); err != nil {
 		return err
 	}
 
@@ -350,6 +358,7 @@ func ScrapeOkizemeForFrameData(
 			return err
 		}
 
+		frameData.Key = models.EncodeMoveName(*moveName)
 		frameData.Command = *moveName
 		allFrameData = append(allFrameData, *frameData)
 	}
@@ -367,7 +376,17 @@ func ScrapeOkizemeForFrameData(
 func Scrape(character, outputDir string, downloadVideos, getFrameData bool) error {
 	fmt.Printf("\nScraping okizeme.gg...\n\n")
 
-	browser := rod.New()
+	// Leakless(false): rod's "leakless.exe" helper is frequently quarantined by
+	// Windows antivirus as a false positive ("contains a virus or potentially
+	// unwanted software"). Launch Chromium directly via the launcher instead.
+	l := launcher.New().Leakless(false)
+	controlURL, err := l.Launch()
+	if err != nil {
+		return err
+	}
+	defer l.Kill()
+
+	browser := rod.New().ControlURL(controlURL)
 	if err := browser.Connect(); err != nil {
 		return err
 	}
@@ -385,7 +404,7 @@ func Scrape(character, outputDir string, downloadVideos, getFrameData bool) erro
 	if err := page.Navigate(fmt.Sprintf("https://okizeme.gg/database/%s", character)); err != nil {
 		return err
 	}
-	if err := page.WaitStable(time.Second * 3.0); err != nil {
+	if err := page.WaitStable(pageStableWait); err != nil {
 		return err
 	}
 

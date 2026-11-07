@@ -12,6 +12,7 @@ import (
 
 const (
 	OKI_SCRAPER_NOTE_TYPE_NAME = "okiscraper-tekken8"
+	ankiConnectURL             = "http://localhost:8765"
 
 	okiScraperFrontCardTemplate = `
 	<video autoplay loop>
@@ -187,12 +188,12 @@ func executeAnkiRequest[T any](request AnkiPayload) (*AnkiResponse[T], error) {
 	}
 
 	response, err := http.Post(
-		"http://localhost:8765",
+		ankiConnectURL,
 		"application/json",
 		bytes.NewBuffer(jsonData),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not reach AnkiConnect at %s - is Anki open with the AnkiConnect add-on installed? (%w)", ankiConnectURL, err)
 	}
 	defer response.Body.Close()
 

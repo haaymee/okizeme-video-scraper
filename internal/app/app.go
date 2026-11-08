@@ -24,11 +24,11 @@ const (
 type App struct {
 	Character string
 	Actions   []cli.AppOptions
-	// injected collaborators live here in Stage 2; in Stage 1 keep it minimal
+	WebmCache map[string]bool
 }
 
 func New(character string, actions []cli.AppOptions) *App {
-	return &App{Character: character, Actions: actions}
+	return &App{Character: character, Actions: actions, WebmCache: make(map[string]bool)}
 }
 
 func (a *App) Run() error {
@@ -79,6 +79,15 @@ func (a *App) setupAnki() error {
 		fmt.Printf("Okiscraper Note Type already exists\n\n")
 	}
 
+	existingWebmVideos, err := anki.GetMediaFiles(fmt.Sprintf("%s_*.webm", a.Character))
+	if err != nil {
+		return err
+	}
+
+	for _, video := range existingWebmVideos {
+		a.WebmCache[video] = true
+	}
+
 	if err := a.convertVideosToWebm(); err != nil {
 		return err
 	}
@@ -93,9 +102,7 @@ type convertJob struct {
 
 func (a *App) convertVideosToWebm() error {
 	webmOutputDir := filepath.Join(scraperOutputDir, a.Character, "webm")
-	if err := os.RemoveAll(webmOutputDir); err != nil {
-		return err
-	}
+
 	if err := os.MkdirAll(webmOutputDir, os.ModePerm); err != nil {
 		return err
 	}
@@ -127,9 +134,15 @@ func (a *App) convertVideosToWebm() error {
 		fmt.Printf("Processing %s\n", file)
 		key := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
 		outputFileName := a.Character + "_" + webmFileKey(key) + ".webm"
-		jobs <- convertJob{
-			InputPath:  file,
-			OutputPath: filepath.Join(webmOutputDir, outputFileName),
+
+		_, ok := a.WebmCache[strings.ToLower(outputFileName)]
+		if !ok {
+			jobs <- convertJob{
+				InputPath:  file,
+				OutputPath: filepath.Join(webmOutputDir, outputFileName),
+			}
+		} else {
+			fmt.Printf("Skipping %s (already exists in cache)\n\n", outputFileName)
 		}
 	}
 
@@ -166,15 +179,22 @@ func (a *App) buildCards(deckName string) error {
 	}
 
 	created := 0
+	failed := 0
 	for _, c := range ready {
 		if err := anki.CreateCard(deckName, a.Character, c.Move, c.VideoPath); err != nil {
 			fmt.Printf("Failed to create card [%s]: %v\n", c.Move.Command, err)
+			failed++
 			continue
 		}
 		created++
 	}
 
-	fmt.Printf("\nCreated %d cards (%d skipped, no video)\n", created, len(skipped))
+	fmt.Printf(
+		"\nCreated %d cards\n%d skipped, no video\n%d failed, AnkiConnect error\n",
+		created,
+		len(skipped),
+		failed,
+	)
 	return nil
 }
 

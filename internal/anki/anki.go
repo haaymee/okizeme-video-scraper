@@ -223,6 +223,23 @@ func CreateNoteType(noteTypeName string) error {
 	return nil
 }
 
+func GetMediaFiles(pattern string) ([]string, error) {
+	request := AnkiPayload{
+		Action:  "getMediaFilesNames",
+		Version: 6,
+		Params: map[string]any{
+			"pattern": pattern,
+		},
+	}
+
+	response, err := executeAnkiRequest[[]string](request)
+	if err != nil {
+		return nil, err
+	}
+
+	return response.Result, nil
+}
+
 func executeAnkiRequest[T any](request AnkiPayload) (*AnkiResponse[T], error) {
 	jsonData, err := json.Marshal(request)
 	if err != nil {

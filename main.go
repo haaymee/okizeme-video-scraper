@@ -21,4 +21,7 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("Total Time: %s", time.Since(start))
+
+	fmt.Println("Press any key to exit...")
+	fmt.Scanln()
 }

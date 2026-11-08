@@ -195,6 +195,7 @@ func (a *App) buildCards(deckName string) error {
 		len(skipped),
 		failed,
 	)
+
 	return nil
 }
 
